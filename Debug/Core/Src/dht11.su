@@ -1,0 +1,4 @@
+dht11.c:12:13:delay_us	16	static
+dht11.c:19:13:DHT11_SetOutput	24	static
+dht11.c:31:13:DHT11_SetInput	24	static
+dht11.c:43:9:DHT11_Read	32	static
