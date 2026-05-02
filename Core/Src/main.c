@@ -46,6 +46,7 @@
 
 #define LIGHT_THRESHOLD 2000
 
+#define DEBOUNCE_TIME 50
 // ===== STEPPER ULN2003 (NON-BLOCKING) =====
 #define STEPPER_DELAY 2   // ms
 
@@ -110,6 +111,20 @@ typedef enum { STATE_THU, STATE_PHOI } SystemState;
 SystemState currentState = STATE_THU;
 SystemState targetState  = STATE_THU;
 
+// =======KEYPAD=====//
+typedef enum {
+    KP_IDLE,
+    KP_DEBOUNCE,
+    KP_PRESSED
+} KeypadState;
+
+KeypadState kp_state = KP_IDLE;
+
+char kp_last_key = 0;
+char kp_output_key = 0;
+
+uint32_t kp_time = 0;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -163,7 +178,7 @@ uint8_t system_locked = 0;
 uint8_t manual_mode = 0; // 0 = auto, 1 = manual
 
 // ====KEYPAD====
-char keypad_read()
+char keypad_scan()
 {
     for(int r=0; r<4; r++)
     {
@@ -176,15 +191,58 @@ char keypad_read()
         {
             if(HAL_GPIO_ReadPin(GPIOB, col_pins[c]) == GPIO_PIN_RESET)
             {
-                HAL_Delay(20);
-
-                if(HAL_GPIO_ReadPin(GPIOB, col_pins[c]) == GPIO_PIN_RESET)
-                {
-                    while(HAL_GPIO_ReadPin(GPIOB, col_pins[c]) == GPIO_PIN_RESET);
-                    return keymap[r][c];
-                }
+                return keymap[r][c];
             }
         }
+    }
+    return 0;
+}
+void keypad_fsm()
+{
+    char key = keypad_scan();
+
+    switch(kp_state)
+    {
+        case KP_IDLE:
+            if(key != 0)
+            {
+                kp_last_key = key;
+                kp_time = HAL_GetTick();
+                kp_state = KP_DEBOUNCE;
+            }
+            break;
+
+        case KP_DEBOUNCE:
+            if(HAL_GetTick() - kp_time >= DEBOUNCE_TIME)
+            {
+                if(key == kp_last_key)
+                {
+                    kp_output_key = key;   // ✅ key hợp lệ
+                    kp_state = KP_PRESSED;
+                }
+                else
+                {
+                    kp_state = KP_IDLE;
+                }
+            }
+            break;
+
+        case KP_PRESSED:
+            // chờ nhả phím
+            if(key == 0)
+            {
+                kp_state = KP_IDLE;
+            }
+            break;
+    }
+}
+char keypad_getkey()
+{
+    if(kp_output_key != 0)
+    {
+        char k = kp_output_key;
+        kp_output_key = 0;   // chỉ clear khi đã đọc
+        return k;
     }
     return 0;
 }
@@ -282,29 +340,34 @@ void fan_apply(FanState s)
 
 void fan_fsm(uint8_t isRaining)
 {
-    if(fan_mode == FAN_MANUAL)
-        return;   // 👉 manual thì AUTO cấm động vào
-
-    // ===== AUTO MODE =====
-    if(isRaining && !rain_prev)
+    // 🌧 mưa luôn bật quạt
+    if(isRaining)
     {
         fan_apply(FAN_ON);
         fan_timer = HAL_GetTick();
+        return;
     }
+
+    if(fan_mode == FAN_MANUAL)
+        return;
 
     if(fan_state == FAN_ON)
     {
         if(HAL_GetTick() - fan_timer > 10000)
             fan_apply(FAN_OFF);
     }
-
-    rain_prev = isRaining;
 }
 
 void update_logic(uint8_t isRaining, uint8_t isBright, float humi)
 {
-    if(manual_mode) return; // 🔥 quan trọng
+    // 🌞 Nếu điều kiện đẹp → tự quay lại AUTO
+    if(!isRaining && isBright)
+        manual_mode = 0;
 
+    // 👉 Nếu vẫn đang manual thì KHÔNG auto
+    if(manual_mode) return;
+
+    // ===== LOGIC =====
     if(isRaining || humi > 80 || !isBright)
         targetState = STATE_THU;
     else
@@ -333,7 +396,7 @@ void update_lcd(uint8_t isRaining, uint8_t isBright)
     strcpy(state_str, currentState ? "Phoi" : "Thu");
 
     // ===== DÒNG 1 =====
-    snprintf(line1, 16, "T:%d H:%d F:%d E%d",
+    snprintf(line1, 16, "T:%d H:%d F:%dE%d",
              (int)temp,
              (int)humi,
              fan_state,
@@ -369,13 +432,13 @@ void update_lcd(uint8_t isRaining, uint8_t isBright)
     for(int i=0;i<pass_index;i++)
         lcd_send_data('*');
 }
-void handle_keypad()
+
+void handle_keypad(uint8_t isRaining)
 {
-    char key = keypad_read();
+    char key = keypad_getkey();
     if(!key) return;
 
-    HAL_Delay(150);
-
+    // ===== SYSTEM LOCK =====
     if(system_locked)
     {
         lcd_clear();
@@ -384,15 +447,60 @@ void handle_keypad()
         return;
     }
 
+    // ===== 🔥 KHI MƯA: CHỈ CHO NHẬP PASS =====
+    if(isRaining)
+    {
+        // 👉 chỉ cho nhập số, *, #
+        if(key >= '0' && key <= '9')
+        {
+            if(pass_index < 4)
+            {
+                input_pass[pass_index++] = key;
+                input_pass[pass_index] = '\0';
+            }
+        }
+        else if(key == '*')
+        {
+            pass_index = 0;
+            memset(input_pass,0,5);
+        }
+        else if(key == '#')
+        {
+            if(strcmp(input_pass, correct_pass) == 0)
+            {
+                manual_mode = 0;
+                wrong_count = 0;
+                fan_mode = FAN_AUTO;
+
+                lcd_clear();
+                lcd_send_string("OK");
+            }
+            else
+            {
+                wrong_count++;
+                if(wrong_count >= 5)
+                    system_locked = 1;
+            }
+
+            pass_index = 0;
+            memset(input_pass,0,5);
+        }
+
+        // ❌ chặn toàn bộ A B C D
+        return;
+    }
+
+    // ===== KHÔNG MƯA → HOẠT ĐỘNG BÌNH THƯỜNG =====
     if(key == 'A')
     {
+        manual_mode = 1;
         targetState = STATE_THU;
     }
     else if(key == 'B')
     {
+        manual_mode = 1;
         targetState = STATE_PHOI;
     }
-    // ===== QUẠT =====
     else if(key == 'C')
     {
         fan_mode = FAN_MANUAL;
@@ -400,14 +508,16 @@ void handle_keypad()
     }
     else if(key == 'D')
     {
-    	fan_mode = FAN_MANUAL;
-    	fan_apply(FAN_OFF);
+        fan_mode = FAN_MANUAL;
+        fan_apply(FAN_OFF);
     }
     else if(key >= '0' && key <= '9')
     {
         if(pass_index < 4)
+        {
             input_pass[pass_index++] = key;
-        	input_pass[pass_index] = '\0';
+            input_pass[pass_index] = '\0';
+        }
     }
     else if(key == '*')
     {
@@ -423,13 +533,11 @@ void handle_keypad()
             fan_mode = FAN_AUTO;
 
             lcd_clear();
-            lcd_put_cur(0,0);
             lcd_send_string("OK");
         }
         else
         {
             wrong_count++;
-
             if(wrong_count >= 5)
                 system_locked = 1;
         }
@@ -497,6 +605,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  static uint8_t isRaining = 0;
+	  keypad_fsm();
 	  if(HAL_GetTick() - lastUpdate > 1000)
 	      {
 	          lastUpdate = HAL_GetTick();
@@ -509,7 +619,7 @@ int main(void)
 
 	          adcValue = read_LDR();
 	          uint8_t isBright = (adcValue < LIGHT_THRESHOLD);
-	          uint8_t isRaining = rain_detect();
+	          isRaining = rain_detect();
 
 	          update_logic(isRaining, isBright, humi);
 	          fan_fsm(isRaining);
@@ -517,7 +627,7 @@ int main(void)
 	          update_lcd(isRaining, isBright);
 	      }
 	  	  handle_motor();
-	      handle_keypad();
+	      handle_keypad(isRaining);
   	  }
   }
   /* USER CODE END 3 */
@@ -779,7 +889,7 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* User can add his own implementation to report the file name and line number,
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
-}
+}1
 #endif /* USE_FULL_ASSERT */
 
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
