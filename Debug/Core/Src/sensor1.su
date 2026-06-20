@@ -1,0 +1,3 @@
+sensor1.c:19:9:Sensor_RainDetect	16	static
+sensor1.c:41:10:Sensor_ReadLDR	16	static
+sensor1.c:61:6:Sensor_ReadDHT11	16	static

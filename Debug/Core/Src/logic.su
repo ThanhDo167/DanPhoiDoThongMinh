@@ -1,0 +1,2 @@
+logic.c:24:6:Logic_UpdateRackState	24	static
+logic.c:79:6:Logic_HandleFanAuto	16	static

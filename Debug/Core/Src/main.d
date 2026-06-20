@@ -26,7 +26,11 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_pwr.h \
  ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim.h \
  ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim_ex.h \
- ../Core/Inc/lcd_i2c.h ../Core/Inc/dht11.h
+ ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h \
+ ../Core/Inc/system_state.h ../Core/Inc/main.h ../Core/Inc/sensor1.h \
+ ../Core/Inc/stepper.h ../Core/Inc/actuator.h ../Core/Inc/logic.h \
+ ../Core/Inc/keypad1.h ../Core/Inc/display1.h ../Core/Inc/lcd_i2c.h \
+ ../Core/Inc/uart_cli.h
 
 ../Core/Inc/main.h:
 
@@ -84,6 +88,24 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 
 ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim_ex.h:
 
+../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h:
+
+../Core/Inc/system_state.h:
+
+../Core/Inc/main.h:
+
+../Core/Inc/sensor1.h:
+
+../Core/Inc/stepper.h:
+
+../Core/Inc/actuator.h:
+
+../Core/Inc/logic.h:
+
+../Core/Inc/keypad1.h:
+
+../Core/Inc/display1.h:
+
 ../Core/Inc/lcd_i2c.h:
 
-../Core/Inc/dht11.h:
+../Core/Inc/uart_cli.h:

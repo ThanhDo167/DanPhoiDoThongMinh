@@ -1,0 +1,4 @@
+motor.c:29:7:stepper_write	24	static
+motor.c:47:7:stepper_start	16	static
+motor.c:54:7:stepper_run	16	static
+motor.c:88:7:handle_motor	8	static

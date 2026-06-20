@@ -1,0 +1,3 @@
+keypad1.c:37:6:Keypad_Read	24	static
+keypad1.c:88:13:LCD_Flash	16	static
+keypad1.c:140:6:Keypad_Handle	16	static

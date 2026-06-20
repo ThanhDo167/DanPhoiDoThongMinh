@@ -1,0 +1,5 @@
+stepper.c:38:13:Stepper_Write	24	static
+stepper.c:51:6:Stepper_Start	16	static
+stepper.c:65:6:Stepper_Run	16	static
+stepper.c:103:9:Stepper_IsBusy	4	static
+stepper.c:112:6:Stepper_PowerOff	8	static

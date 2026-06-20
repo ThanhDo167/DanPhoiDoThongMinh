@@ -1,129 +1,29 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * <h2><center>&copy; Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.</center></h2>
-  *
-  * This software component is licensed by ST under BSD 3-Clause license,
-  * the "License"; You may not use this file except in compliance with the
-  * License. You may obtain a copy of the License at:
-  *                        opensource.org/licenses/BSD-3-Clause
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body - Smart clothes drying rack
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdio.h>
-#include <string.h>
-#include <lcd_i2c.h>
-#include <dht11.h>
+#include "system_state.h"
+#include "sensor1.h"
+#include "stepper.h"
+#include "actuator.h"
+#include "logic.h"
+#include "keypad1.h"
+#include "display1.h"
+#include "lcd_i2c.h"
+#include "uart_cli.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-// ==== DEFINE ====
-#define RAIN_PIN GPIO_PIN_1
-#define LDR_CHANNEL ADC_CHANNEL_0
-
-#define BUZZER_PIN GPIO_PIN_3
-#define RELAY_PIN  GPIO_PIN_4
-
-// Stepper
-#define IN1 GPIO_PIN_5
-#define IN2 GPIO_PIN_6
-#define IN3 GPIO_PIN_7
-#define IN4 GPIO_PIN_8
-
-
-#define LIGHT_THRESHOLD 2000
-
-#define DEBOUNCE_TIME 50
-// ===== STEPPER ULN2003 (NON-BLOCKING) =====
-#define STEPPER_DELAY 2   // ms
-
-const uint8_t step_seq[8][4] = {
-    {1,0,0,0},
-    {1,1,0,0},
-    {0,1,0,0},
-    {0,1,1,0},
-    {0,0,1,0},
-    {0,0,1,1},
-    {0,0,0,1},
-    {1,0,0,1}
-};
-
-int step_index = 0;
-int step_dir = 0;          // 1: forward, -1: reverse
-int step_count = 0;
-int step_target = 0;
-uint32_t last_step_time = 0;
-
-extern ADC_HandleTypeDef hadc1;
-extern I2C_HandleTypeDef hi2c1;
-extern TIM_HandleTypeDef htim2;
-
-// ==== GLOBAL ====
-float temp = 0, humi = 0;
-uint16_t adcValue;
-uint32_t lastUpdate = 0;
-// ===== LCD BUFFER =====
-char line1[16];
-char line2[16];
-char old_line1[16] = "";
-char old_line2[16] = "";
-
-
-
-// ===== KEYPAD MAP =====
-const char keymap[4][4] = {
-    {'1','2','3','A'},
-    {'4','5','6','B'},
-    {'7','8','9','C'},
-    {'*','0','#','D'}
-};
-
-uint16_t row_pins[4] = {GPIO_PIN_0, GPIO_PIN_1, GPIO_PIN_10, GPIO_PIN_11};
-uint16_t col_pins[4] = {GPIO_PIN_12, GPIO_PIN_13, GPIO_PIN_14, GPIO_PIN_15};
-uint8_t extended = 0;
-uint8_t buzzer_off = 0;
-
-// ================= FAN FSM =================
-typedef enum { FAN_AUTO, FAN_MANUAL } FanMode;
-typedef enum { FAN_OFF, FAN_ON } FanState;
-
-FanMode fan_mode = FAN_AUTO;
-FanState fan_state = FAN_OFF;
-uint32_t fan_timer = 0;       // đếm thời gian 10s
-uint8_t rain_prev = 0;        // phát hiện cạnh mưa
-
-// ================= SYSTEM =================
-typedef enum { STATE_THU, STATE_PHOI } SystemState;
-
-SystemState currentState = STATE_THU;
-SystemState targetState  = STATE_THU;
-
-// =======KEYPAD=====//
-typedef enum {
-    KP_IDLE,
-    KP_DEBOUNCE,
-    KP_PRESSED
-} KeypadState;
-
-KeypadState kp_state = KP_IDLE;
-
-char kp_last_key = 0;
-char kp_output_key = 0;
-
-uint32_t kp_time = 0;
 
 /* USER CODE END PTD */
 
@@ -143,7 +43,10 @@ I2C_HandleTypeDef hi2c1;
 
 TIM_HandleTypeDef htim2;
 
+UART_HandleTypeDef huart1;
+
 /* USER CODE BEGIN PV */
+
 
 /* USER CODE END PV */
 
@@ -153,405 +56,13 @@ static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-/* USER CODE BEGIN 0 */
-void delay_us(uint16_t us)
-{
-    __HAL_TIM_SET_COUNTER(&htim2, 0);
-    while (__HAL_TIM_GET_COUNTER(&htim2) < us);
-}
-
-// ===== PASSWORD =====
-char correct_pass[] = "1234";
-char input_pass[5] = "";
-char fan_str[5];
-uint8_t pass_index = 0;
-uint8_t wrong_count = 0;
-uint8_t system_locked = 0;
-
-// ===== MODE =====
-uint8_t manual_mode = 0; // 0 = auto, 1 = manual
-
-// ====KEYPAD====
-char keypad_scan()
-{
-    for(int r=0; r<4; r++)
-    {
-        for(int i=0;i<4;i++)
-            HAL_GPIO_WritePin(GPIOB, row_pins[i], GPIO_PIN_SET);
-
-        HAL_GPIO_WritePin(GPIOB, row_pins[r], GPIO_PIN_RESET);
-
-        for(int c=0; c<4; c++)
-        {
-            if(HAL_GPIO_ReadPin(GPIOB, col_pins[c]) == GPIO_PIN_RESET)
-            {
-                return keymap[r][c];
-            }
-        }
-    }
-    return 0;
-}
-void keypad_fsm()
-{
-    char key = keypad_scan();
-
-    switch(kp_state)
-    {
-        case KP_IDLE:
-            if(key != 0)
-            {
-                kp_last_key = key;
-                kp_time = HAL_GetTick();
-                kp_state = KP_DEBOUNCE;
-            }
-            break;
-
-        case KP_DEBOUNCE:
-            if(HAL_GetTick() - kp_time >= DEBOUNCE_TIME)
-            {
-                if(key == kp_last_key)
-                {
-                    kp_output_key = key;   // ✅ key hợp lệ
-                    kp_state = KP_PRESSED;
-                }
-                else
-                {
-                    kp_state = KP_IDLE;
-                }
-            }
-            break;
-
-        case KP_PRESSED:
-            // chờ nhả phím
-            if(key == 0)
-            {
-                kp_state = KP_IDLE;
-            }
-            break;
-    }
-}
-char keypad_getkey()
-{
-    if(kp_output_key != 0)
-    {
-        char k = kp_output_key;
-        kp_output_key = 0;   // chỉ clear khi đã đọc
-        return k;
-    }
-    return 0;
-}
-
-// ===== LDR =====
-uint16_t read_LDR()
-{
-    HAL_ADC_Start(&hadc1);
-    HAL_ADC_PollForConversion(&hadc1,100);
-    return HAL_ADC_GetValue(&hadc1);
-}
-
-// ===== RAIN FILTER =====
-uint8_t rain_detect()
-{
-    int count = 0;
-
-    for(int i=0;i<5;i++)
-    {
-        if(HAL_GPIO_ReadPin(GPIOA, RAIN_PIN) == 0)
-            count++;
-
-        HAL_Delay(5);
-    }
-
-    return (count >= 3);
-}
-// ===== STEPPER =====
-void stepper_write(uint8_t s[4])
-{
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, s[0]);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, s[1]);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, s[2]);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, s[3]); // 🔥 PB8 đúng của bạn
-}
-
-void stepper_start(int steps, int dir)
-{
-    step_target = steps;
-    step_count = 0;
-    step_dir = dir;
-}
-
-void stepper_run()
-{
-    if(step_count >= step_target) return;
-
-    if(HAL_GetTick() - last_step_time >= STEPPER_DELAY)
-    {
-        last_step_time = HAL_GetTick();
-
-        stepper_write((uint8_t*)step_seq[step_index]);
-
-        step_index += step_dir;
-        if(step_index > 7) step_index = 0;
-        if(step_index < 0) step_index = 7;
-
-        step_count++;
-    }
-}
-
-// ===== MOTOR CONTROL =====
-void handle_motor()
-{
-    static uint8_t motor_running = 0;
-
-    if(currentState != targetState && !motor_running)
-    {
-        if(targetState == STATE_THU)
-            stepper_start(1024, -1); // quay vào
-        else
-            stepper_start(1024, 1);  // quay ra
-
-        motor_running = 1;
-    }
-
-    if(motor_running)
-    {
-        stepper_run();
-
-        if(step_count >= step_target)
-        {
-            currentState = targetState;
-            motor_running = 0;
-        }
-    }
-}
-// ===== FAN FSM =====
-void fan_apply(FanState s)
-{
-    fan_state = s;
-    HAL_GPIO_WritePin(GPIOA, RELAY_PIN,
-                      s==FAN_ON?GPIO_PIN_SET:GPIO_PIN_RESET);
-}
-
-void fan_fsm(uint8_t isRaining)
-{
-    // 🌧 mưa luôn bật quạt
-    if(isRaining)
-    {
-        fan_apply(FAN_ON);
-        fan_timer = HAL_GetTick();
-        return;
-    }
-
-    if(fan_mode == FAN_MANUAL)
-        return;
-
-    if(fan_state == FAN_ON)
-    {
-        if(HAL_GetTick() - fan_timer > 10000)
-            fan_apply(FAN_OFF);
-    }
-}
-
-void update_logic(uint8_t isRaining, uint8_t isBright, float humi)
-{
-    // 🌞 Nếu điều kiện đẹp → tự quay lại AUTO
-    if(!isRaining && isBright)
-        manual_mode = 0;
-
-    // 👉 Nếu vẫn đang manual thì KHÔNG auto
-    if(manual_mode) return;
-
-    // ===== LOGIC =====
-    if(isRaining || humi > 80 || !isBright)
-        targetState = STATE_THU;
-    else
-        targetState = STATE_PHOI;
-}
-// ===== BUZZER =====
-void handle_buzzer(uint8_t isRaining)
-{
-    if(system_locked) return;
-
-    if(isRaining && !buzzer_off)
-        HAL_GPIO_WritePin(GPIOA, BUZZER_PIN, 1);
-    else
-        HAL_GPIO_WritePin(GPIOA, BUZZER_PIN, 0);
-}
-
-// ===== LCD =====
-void update_lcd(uint8_t isRaining, uint8_t isBright)
-{
-    char rain_str[5];
-    char light_str[5];
-    char state_str[5];
-
-    strcpy(rain_str, isRaining ? "Mua" : "Nang");
-    strcpy(light_str, isBright ? "Sang" : "Toi");
-    strcpy(state_str, currentState ? "Phoi" : "Thu");
-
-    // ===== DÒNG 1 =====
-    snprintf(line1, 16, "T:%d H:%d F:%dE%d",
-             (int)temp,
-             (int)humi,
-             fan_state,
-             wrong_count);
-
-    // ===== DÒNG 2 =====
-    snprintf(line2, 16, "%s|%s|%s",
-             rain_str,
-             light_str,
-             state_str);
-
-    // ===== UPDATE LCD =====
-    if(strcmp(old_line1,line1)!=0)
-    {
-        lcd_put_cur(0,0);
-        lcd_send_string("                ");
-        lcd_put_cur(0,0);
-        lcd_send_string(line1);
-        strcpy(old_line1,line1);
-    }
-
-    if(strcmp(old_line2,line2)!=0)
-    {
-        lcd_put_cur(1,0);
-        lcd_send_string("                ");
-        lcd_put_cur(1,0);
-        lcd_send_string(line2);
-        strcpy(old_line2,line2);
-    }
-
-    // ===== HIỂN THỊ PASS ***** =====
-    lcd_put_cur(1,12);
-    for(int i=0;i<pass_index;i++)
-        lcd_send_data('*');
-}
-
-void handle_keypad(uint8_t isRaining)
-{
-    char key = keypad_getkey();
-    if(!key) return;
-
-    // ===== SYSTEM LOCK =====
-    if(system_locked)
-    {
-        lcd_clear();
-        lcd_put_cur(0,0);
-        lcd_send_string("BI KHOA!");
-        return;
-    }
-
-    // ===== 🔥 KHI MƯA: CHỈ CHO NHẬP PASS =====
-    if(isRaining)
-    {
-        // 👉 chỉ cho nhập số, *, #
-        if(key >= '0' && key <= '9')
-        {
-            if(pass_index < 4)
-            {
-                input_pass[pass_index++] = key;
-                input_pass[pass_index] = '\0';
-            }
-        }
-        else if(key == '*')
-        {
-            pass_index = 0;
-            memset(input_pass,0,5);
-        }
-        else if(key == '#')
-        {
-            if(strcmp(input_pass, correct_pass) == 0)
-            {
-                manual_mode = 0;
-                wrong_count = 0;
-                fan_mode = FAN_AUTO;
-
-                lcd_clear();
-                lcd_send_string("OK");
-            }
-            else
-            {
-                wrong_count++;
-                if(wrong_count >= 5)
-                    system_locked = 1;
-            }
-
-            pass_index = 0;
-            memset(input_pass,0,5);
-        }
-
-        // ❌ chặn toàn bộ A B C D
-        return;
-    }
-
-    // ===== KHÔNG MƯA → HOẠT ĐỘNG BÌNH THƯỜNG =====
-    if(key == 'A')
-    {
-        manual_mode = 1;
-        targetState = STATE_THU;
-    }
-    else if(key == 'B')
-    {
-        manual_mode = 1;
-        targetState = STATE_PHOI;
-    }
-    else if(key == 'C')
-    {
-        fan_mode = FAN_MANUAL;
-        fan_apply(FAN_ON);
-    }
-    else if(key == 'D')
-    {
-        fan_mode = FAN_MANUAL;
-        fan_apply(FAN_OFF);
-    }
-    else if(key >= '0' && key <= '9')
-    {
-        if(pass_index < 4)
-        {
-            input_pass[pass_index++] = key;
-            input_pass[pass_index] = '\0';
-        }
-    }
-    else if(key == '*')
-    {
-        pass_index = 0;
-        memset(input_pass,0,5);
-    }
-    else if(key == '#')
-    {
-        if(strcmp(input_pass, correct_pass) == 0)
-        {
-            manual_mode = 0;
-            wrong_count = 0;
-            fan_mode = FAN_AUTO;
-
-            lcd_clear();
-            lcd_send_string("OK");
-        }
-        else
-        {
-            wrong_count++;
-            if(wrong_count >= 5)
-                system_locked = 1;
-        }
-
-        pass_index = 0;
-        memset(input_pass,0,5);
-    }
-}
-
-
-
-
-// ===== LOGIC =====
-
 
 /* USER CODE END 0 */
 
@@ -586,52 +97,75 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM2_Init();
   MX_ADC1_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  lcd_init();
-  strcpy(old_line1,"");
-  strcpy(old_line2,"");
-  lcd_clear();
-
   HAL_TIM_Base_Start(&htim2);
+  lcd_init();
+  	lcd_clear();
 
+  	lcd_put_cur(0, 0);
+  	lcd_send_string("SMART DRY RACK");
+  	lcd_put_cur(1, 0);
+  	lcd_send_string("SYSTEM READY");
+  	HAL_Delay(1000);
+  	lcd_clear();
+  	 UART_CLI_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-
-
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  static uint8_t isRaining = 0;
-	  keypad_fsm();
-	  if(HAL_GetTick() - lastUpdate > 1000)
-	      {
-	          lastUpdate = HAL_GetTick();
+	  /* 1. Bàn phím vật lý — quét liên tục */
+	          Keypad_Handle();
 
-	          if(DHT11_Read(&temp,&humi)!=0)
+	          /* 2. Nhận và xử lý lệnh từ PuTTY — non-blocking */
+//	          UART_CLI_HandleRx();
+
+	          /* 3. Điều khiển động cơ bước — non-blocking, edge detection */
 	          {
-	              temp = 0;
-	              humi = 0;
+	              uint8_t prev_busy = Stepper_IsBusy();
+	              Stepper_Run();
+
+	              if (prev_busy && !Stepper_IsBusy())
+	              {
+	                  currentState = targetState;
+	              }
+
+	              if (!Stepper_IsBusy() && currentState != targetState)
+	              {
+	                  int dir = (targetState == STATE_THU) ? 1 : -1;
+	                  Stepper_Start(STEPPER_STEPS, dir);
+	              }
 	          }
 
-	          adcValue = read_LDR();
-	          uint8_t isBright = (adcValue < LIGHT_THRESHOLD);
-	          isRaining = rain_detect();
+	          /* 4. Cập nhật cảm biến, logic, LCD, UART mỗi 1 giây */
+	          if (HAL_GetTick() - lastUpdate > 1000U)
+	          {
+	              lastUpdate = HAL_GetTick();
 
-	          update_logic(isRaining, isBright, humi);
-	          fan_fsm(isRaining);
-	          handle_buzzer(isRaining);
-	          update_lcd(isRaining, isBright);
-	      }
-	  	  handle_motor();
-	      handle_keypad(isRaining);
-  	  }
+	              Sensor_ReadDHT11(&temp, &humi);
+	              adcValue       = Sensor_ReadLDR();
+	              last_isBright  = (adcValue < LIGHT_THRESHOLD) ? 1U : 0U;
+	              last_isRaining = Sensor_RainDetect();
+
+	              Logic_UpdateRackState(last_isRaining, last_isBright, humi);
+	              Logic_HandleFanAuto(last_isRaining);
+
+	              Actuator_HandleBuzzer(last_isRaining);
+
+	              Display_Update(last_isRaining, last_isBright);
+
+	              /* Cập nhật dashboard PuTTY cùng chu kỳ 1 giây */
+	              UART_CLI_Update();
+	          }
+
   }
   /* USER CODE END 3 */
-
+}
 
 /**
   * @brief System Clock Configuration
@@ -803,6 +337,39 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -889,7 +456,7 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* User can add his own implementation to report the file name and line number,
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
-}1
+}
 #endif /* USE_FULL_ASSERT */
 
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

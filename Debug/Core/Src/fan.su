@@ -1,0 +1,2 @@
+fan.c:16:7:set_fan	16	static
+fan.c:23:7:handle_fan_auto	16	static

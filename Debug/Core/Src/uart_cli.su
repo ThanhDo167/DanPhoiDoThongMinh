@@ -1,0 +1,8 @@
+uart_cli.c:82:6:UART_CLI_Print	16	static
+uart_cli.c:88:6:UART_CLI_Println	16	static
+uart_cli.c:95:20:goto_rc	24	static
+uart_cli.c:107:13:write_val	16	static
+uart_cli.c:119:13:draw_skeleton	8	static
+uart_cli.c:147:13:update_values	32	static
+uart_cli.c:248:6:UART_CLI_Init	8	static
+uart_cli.c:265:6:UART_CLI_Update	8	static

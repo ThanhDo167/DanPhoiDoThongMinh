@@ -1,0 +1,2 @@
+actuator.c:14:6:Actuator_SetFan	16	static
+actuator.c:29:6:Actuator_HandleBuzzer	16	static
